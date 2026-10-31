@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from koleo.api import KoleoAPI, V3ConnectionResult
 
-from models import Connection, Query, Station
+from models import Connection, Query, Station, Train
 
 
 class KoleoProvider:
@@ -18,7 +18,7 @@ class KoleoProvider:
     async def find_stations(self, name: str) -> list[Station]:
         if not self.stations:
             raw = sorted(await self.api.get_stations(), key=lambda s: -s["hits"])
-            self.stations = [Station(id=s["id"], name=s["name"], slug=s["name_slug"]) for s in raw]
+            self.stations = [Station(external_id=str(s["id"]), name=s["name"]) for s in raw]
         needle = name.lower()
         return [s for s in self.stations if needle in s.name.lower()]
 
@@ -32,23 +32,26 @@ class KoleoProvider:
 
         connections = []
         while start <= end:
-            results = await self.api.v3_connection_search(query.origin.id, query.destination.id, brand_ids, start)
+            results = await self.api.v3_connection_search(
+                int(query.origin.external_id), int(query.destination.external_id), brand_ids, start
+            )
             departures = [datetime.fromisoformat(r["departure"]).replace(tzinfo=None) for r in results]
             for result, departure in zip(results, departures):
                 if departure > end:
                     continue
                 if query.filters.max_transfers is not None and result["changes"] > query.filters.max_transfers:
                     continue
-                connections.append(await self.connection(result))
+                connections.append(await self.connection(result, query.travel_date))
             if not departures or max(departures) < start:
                 break
             start = max(departures) + timedelta(minutes=1)
         return connections
 
-    async def connection(self, result: V3ConnectionResult) -> Connection:
+    async def connection(self, result: V3ConnectionResult, travel_date: date) -> Connection:
         departure = datetime.fromisoformat(result["departure"])
         arrival = datetime.fromisoformat(result["arrival"])
         return Connection(
+            travel_date=travel_date,
             departure=departure,
             arrival=arrival,
             duration_min=int((arrival - departure).total_seconds() // 60),
@@ -61,9 +64,9 @@ class KoleoProvider:
         price = await self.api.v3_get_price(uuid)
         return Decimal(price["price"].replace(",", ".")).quantize(Decimal("0.01")) if price else None
 
-    def trains(self, result: V3ConnectionResult) -> list[str]:
+    def trains(self, result: V3ConnectionResult) -> list[Train]:
         return [
-            f"{self.brands.get(leg['commercial_brand_id'], '')} {leg['train_nr']}".strip()
+            Train(category=self.brands.get(leg["commercial_brand_id"], ""), number=str(leg["train_nr"]))
             for leg in result["legs"]
             if leg["leg_type"] == "train_leg"
         ]
