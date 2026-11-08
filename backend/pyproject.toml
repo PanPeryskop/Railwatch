@@ -8,6 +8,8 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.161.0",
     "koleo-cli==0.2.137.40",
     "pydantic>=2",
+    "uvicorn>=0.54.0",
 ]
